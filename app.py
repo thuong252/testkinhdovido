@@ -4,26 +4,19 @@ import pandas as pd
 import requests
 import streamlit as st
 from bs4 import BeautifulSoup
+from geopy.geocoders import Nominatim
 
 # Cấu hình giao diện trang Web
 st.set_page_config(
-    page_title="Công cụ Thu Thập Dữ Liệu & Google Maps",
+    page_title="Công cụ Thu Thập Dữ Liệu & Tọa Độ Miễn Phí",
     page_icon="🏢",
     layout="wide",
 )
 
-st.title("🏢 Công Cụ Export Dữ Liệu NiceOffice & Geocoding Maps")
+st.title("🏢 Công Cụ Export Dữ Liệu NiceOffice & Lấy Tọa Độ Miễn Phí")
 st.write(
-    "Nhập URL danh mục sản phẩm từ website **NiceOffice** và tích hợp lấy tọa độ"
-    " từ Google Maps."
-)
-
-# --- CẤU HÌNH API KEY TRÊN SIDEBAR ---
-st.sidebar.header("⚙️ Cấu hình Google Maps API")
-api_key_input = st.sidebar.text_input(
-    "Nhập Google Maps API Key:",
-    type="password",
-    help="Dán API Key của bạn vào đây để lấy kinh độ, vĩ độ.",
+    "Tool tự động quét dữ liệu từ **NiceOffice** và tự động chấm tọa độ (Kinh"
+    " độ, Vĩ độ) lên bản đồ hoàn toàn miễn phí không cần API Key!"
 )
 
 # 1. Ô NHẬP URL
@@ -66,28 +59,31 @@ def get_total_pages(soup):
     return 37
 
 
-def get_lat_lng(address, building_name, api_key):
-    """Hàm gọi Google Maps Geocoding API để lấy tọa độ từ Tòa nhà + Địa chỉ"""
-    if not api_key:
-        return "", ""
-
-    # Kết hợp tên tòa nhà và địa chỉ để Google Maps tìm kiếm chính xác nhất
-    query = f"{building_name}, {address}" if address else building_name
-    url = f"https://maps.googleapis.com/maps/api/geocode/json?address={requests.utils.quote(query)}&key={api_key}"
-
+def get_lat_lng_free(address, building_name):
+    """Sử dụng Nominatim (OpenStreetMap) để lấy kinh độ, vĩ độ miễn phí không cần API Key"""
     try:
-        response = requests.get(url, timeout=5)
-        if response.status_code == 200:
-            data = response.json()
-            if data["results"]:
-                location = data["results"][0]["geometry"]["location"]
-                return location["lat"], location["lng"]
+        # Khởi tạo geolocator (bắt buộc phải đặt tên user_agent riêng biệt của bạn)
+        geolocator = Nominatim(user_agent="niceoffice_scraper_tool_v1")
+
+        # Kết hợp tên tòa nhà và địa chỉ, thêm ", Thành phố Hồ Chí Minh" để tối ưu hóa tìm kiếm
+        query = f"{building_name}, {address}, Thành phố Hồ Chí Minh"
+        
+        # Gọi API OpenStreetMap
+        location = geolocator.geocode(query, timeout=10)
+        
+        if location:
+            return location.latitude, location.longitude
+        else:
+            # Nếu tìm kết hợp không ra, thử tìm chỉ với Địa chỉ thu gọn hơn
+            location_alt = geolocator.geocode(f"{address}, Thành phố Hồ Chí Minh", timeout=10)
+            if location_alt:
+                return location_alt.latitude, location_alt.longitude
     except Exception:
         pass
     return "", ""
 
 
-def scrape_data(base_url, api_key):
+def scrape_data(base_url):
     if not base_url.endswith("/"):
         base_url += "/"
 
@@ -104,7 +100,6 @@ def scrape_data(base_url, api_key):
     first_soup = BeautifulSoup(res.text, "html.parser")
     total_pages = get_total_pages(first_soup)
 
-    # Thanh hiển thị tiến độ (Progress bar)
     progress_bar = st.progress(0)
     status_text = st.empty()
 
@@ -262,21 +257,20 @@ def scrape_data(base_url, api_key):
     if not df.empty:
         df.drop_duplicates(subset=["Tòa nhà"], inplace=True)
 
-        # Nếu người dùng có nhập API Key, tiến hành quét tọa độ Google Maps
-        if api_key:
-            status_text.text(
-                "🗺️ Đang kết nối Google Maps để quét kinh độ, vĩ độ..."
-            )
-            lat_list = []
-            lng_list = []
+        # Tiến hành quét tọa độ tự động qua OpenStreetMap (Miễn phí)
+        status_text.text(
+            "🗺️ Đang quét kinh độ, vĩ độ qua OpenStreetMap (Miễn phí)..."
+        )
+        lat_list = []
+        lng_list = []
 
-            for index, row in df.iterrows():
-                lat, lng = get_lat_lng(row["Địa chỉ"], row["Tòa nhà"], api_key)
-                lat_list.append(lat)
-                lng_list.append(lng)
+        for index, row in df.iterrows():
+            lat, lng = get_lat_lng_free(row["Địa chỉ"], row["Tòa nhà"])
+            lat_list.append(lat)
+            lng_list.append(lng)
 
-            df["Vĩ độ (Lat)"] = lat_list
-            df["Kinh độ (Lng)"] = lng_list
+        df["Vĩ độ (Lat)"] = lat_list
+        df["Kinh độ (Lng)"] = lng_list
 
     status_text.text("✅ Đã hoàn thành toàn bộ quá trình thu thập dữ liệu!")
     progress_bar.progress(1.0)
@@ -284,23 +278,11 @@ def scrape_data(base_url, api_key):
 
 
 # 2. NÚT KÍCH HOẠT QUÉT DỮ LIỆU
-if st.button("🚀 Bắt Đầu Thu Thập & Lấy Tọa Độ", type="primary"):
+if st.button("🚀 Bắt Đầu Thu Thập & Lấy Tọa Độ Miễn Phí", type="primary"):
     if not target_url:
         st.warning("Vui lòng nhập đường link danh mục!")
     else:
-        # Lấy API Key từ ô nhập hoặc Streamlit Secrets
-        active_api_key = api_key_input or st.secrets.get(
-            "GOOGLE_MAPS_API_KEY", ""
-        )
-
-        if not active_api_key:
-            st.warning(
-                "⚠️ Bạn chưa nhập Google Maps API Key ở thanh bên trái. Tool"
-                " vẫn sẽ cào dữ liệu văn phòng bình thường nhưng sẽ bỏ qua phần"
-                " lấy tọa độ!"
-            )
-
-        df_result = scrape_data(target_url, active_api_key)
+        df_result = scrape_data(target_url)
 
         if not df_result.empty:
             st.success(
@@ -311,7 +293,7 @@ if st.button("🚀 Bắt Đầu Thu Thập & Lấy Tọa Độ", type="primary")
             st.subheader("📊 Bảng Dữ Liệu Trực Quan (Có Tọa Độ)")
             st.dataframe(df_result, use_container_width=True)
 
-            # Nếu có dữ liệu tọa độ hợp lệ, hiển thị trực quan lên bản đồ Streamlit
+            # Hiển thị trực quan lên bản đồ Streamlit
             if (
                 "Vĩ độ (Lat)" in df_result.columns
                 and not df_result["Vĩ độ (Lat)"].eq("").all()
@@ -334,7 +316,7 @@ if st.button("🚀 Bắt Đầu Thu Thập & Lấy Tọa Độ", type="primary")
             st.download_button(
                 label="📥 Tải File Excel Kết Quả (.xlsx)",
                 data=buffer.getvalue(),
-                file_name="NiceOffice_With_Coordinates.xlsx",
+                file_name="NiceOffice_Free_Coordinates.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
         else:
