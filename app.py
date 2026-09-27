@@ -4,19 +4,19 @@ import pandas as pd
 import requests
 import streamlit as st
 from bs4 import BeautifulSoup
-from geopy.geocoders import Nominatim
+from geopy.geocoders import ArcGIS
 
 # Cấu hình giao diện trang Web
 st.set_page_config(
-    page_title="Công cụ Thu Thập Dữ Liệu & Tọa Độ Tòa Nhà",
+    page_title="Công cụ Thu Thập Dữ Liệu & Tọa Độ ArcGIS",
     page_icon="🏢",
     layout="wide",
 )
 
-st.title("🏢 Công Cụ Export Dữ Liệu NiceOffice & Tra Cứu Tọa Độ Tòa Nhà")
+st.title("🏢 Công Cụ Export Dữ Liệu NiceOffice & Lấy Tọa Độ ArcGIS")
 st.write(
     "Tool tự động quét dữ liệu từ **NiceOffice** và lấy tọa độ chính xác dựa trên"
-    " **Tên tòa nhà** và **Địa chỉ**."
+    " **Tên tòa nhà** (Cột B) hoàn toàn miễn phí."
 )
 
 # 1. Ô NHẬP URL
@@ -60,28 +60,37 @@ def get_total_pages(soup):
 
 
 def get_lat_lng_by_building(building_name, address):
-    """Hàm tra cứu tọa độ tối ưu hóa dựa vào Tên tòa nhà và Địa chỉ hoàn toàn miễn phí"""
+    """Sử dụng ArcGIS geocoder miễn phí, không bị chặn IP trên Streamlit Cloud"""
     try:
-        geolocator = Nominatim(user_agent="niceoffice_building_locator_v2")
+        # Khởi tạo ArcGIS geolocator
+        geolocator = ArcGIS(user_agent="niceoffice_app_v3")
 
-        # Làm sạch tên tòa nhà (loại bỏ chữ 'TÒA NHÀ' nếu có để tìm kiếm trên bản đồ chuẩn hơn)
+        # Làm sạch tên tòa nhà (loại bỏ chữ 'TÒA NHÀ' để tìm kiếm chuẩn hơn)
         clean_name = re.sub(
             r"^tòa nhà\s*", "", building_name, flags=re.IGNORECASE
         ).strip()
 
-        # Thử lần 1: Kết hợp "Tên tòa nhà + Địa chỉ + Thành phố Hồ Chí Minh"
-        queries = [
-            f"{clean_name}, {address}, Thành phố Hồ Chí Minh",
-            f"{building_name}, {address}, TP.HCM",
-            f"{address}, Thành phố Hồ Chí Minh",  # Fallback nếu tên tòa nhà quá đặc biệt không tìm thấy
-        ]
+        # Ưu tiên tìm kiếm kết hợp: Tên tòa nhà + Địa chỉ + Thành phố Hồ Chí Minh
+        query = f"{clean_name}, {address}, Thành phố Hồ Chí Minh"
 
-        for q in queries:
-            if not q.strip():
-                continue
-            location = geolocator.geocode(q, timeout=5)
-            if location:
-                return location.latitude, location.longitude
+        location = geolocator.geocode(query, timeout=10)
+        if location:
+            return location.latitude, location.longitude
+
+        # Fallback 1: Thử tìm với tên đầy đủ + địa chỉ
+        query_alt = f"{building_name}, {address}, TP.HCM"
+        location_alt = geolocator.geocode(query_alt, timeout=10)
+        if location_alt:
+            return location_alt.latitude, location_alt.longitude
+
+        # Fallback 2: Nếu không ra, tìm bằng riêng địa chỉ
+        if address:
+            location_addr = geolocator.geocode(
+                f"{address}, Thành phố Hồ Chí Minh", timeout=10
+            )
+            if location_addr:
+                return location_addr.latitude, location_addr.longitude
+
     except Exception:
         pass
     return "", ""
@@ -261,9 +270,9 @@ def scrape_data(base_url):
     if not df.empty:
         df.drop_duplicates(subset=["Tòa nhà"], inplace=True)
 
-        # Tiến hành quét tọa độ tự động dựa trên Tên tòa nhà và Địa chỉ
+        # Tiến hành quét tọa độ qua ArcGIS dựa trên Tên tòa nhà + Địa chỉ
         status_text.text(
-            "🗺️ Đang tra cứu tọa độ theo Tên tòa nhà và Địa chỉ..."
+            "🗺️ Đang tra cứu tọa độ qua ArcGIS theo Tên tòa nhà..."
         )
         lat_list = []
         lng_list = []
@@ -282,9 +291,7 @@ def scrape_data(base_url):
 
 
 # 2. NÚT KÍCH HOẠT QUÉT DỮ LIỆU
-if st.button(
-    "🚀 Bắt Đầu Thu Thập & Lấy Tọa Độ Theo Tên Tòa Nhà", type="primary"
-):
+if st.button("🚀 Bắt Đầu Thu Thập & Lấy Tọa Độ ArcGIS", type="primary"):
     if not target_url:
         st.warning("Vui lòng nhập đường link danh mục!")
     else:
@@ -296,7 +303,7 @@ if st.button(
             )
 
             # 3. HIỂN THỊ BẢNG KẾT QUẢ NGAY BÊN DƯỚI
-            st.subheader("📊 Bảng Dữ Liệu Trực Quan (Có Tọa Độ Tòa Nhà)")
+            st.subheader("📊 Bảng Dữ Liệu Trực Quan (Có Tọa Độ)")
             st.dataframe(df_result, use_container_width=True)
 
             # Hiển thị trực quan lên bản đồ Streamlit
@@ -322,7 +329,7 @@ if st.button(
             st.download_button(
                 label="📥 Tải File Excel Kết Quả (.xlsx)",
                 data=buffer.getvalue(),
-                file_name="NiceOffice_Building_Coordinates.xlsx",
+                file_name="NiceOffice_ArcGIS_Coordinates.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
         else:
