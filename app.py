@@ -8,15 +8,15 @@ from geopy.geocoders import Nominatim
 
 # Cấu hình giao diện trang Web
 st.set_page_config(
-    page_title="Công cụ Thu Thập Dữ Liệu & Tọa Độ Miễn Phí",
+    page_title="Công cụ Thu Thập Dữ Liệu & Tọa Độ Tòa Nhà",
     page_icon="🏢",
     layout="wide",
 )
 
-st.title("🏢 Công Cụ Export Dữ Liệu NiceOffice & Lấy Tọa Độ Miễn Phí")
+st.title("🏢 Công Cụ Export Dữ Liệu NiceOffice & Tra Cứu Tọa Độ Tòa Nhà")
 st.write(
-    "Tool tự động quét dữ liệu từ **NiceOffice** và tự động chấm tọa độ (Kinh"
-    " độ, Vĩ độ) lên bản đồ hoàn toàn miễn phí không cần API Key!"
+    "Tool tự động quét dữ liệu từ **NiceOffice** và lấy tọa độ chính xác dựa trên"
+    " **Tên tòa nhà** và **Địa chỉ**."
 )
 
 # 1. Ô NHẬP URL
@@ -59,25 +59,29 @@ def get_total_pages(soup):
     return 37
 
 
-def get_lat_lng_free(address, building_name):
-    """Sử dụng Nominatim (OpenStreetMap) để lấy kinh độ, vĩ độ miễn phí không cần API Key"""
+def get_lat_lng_by_building(building_name, address):
+    """Hàm tra cứu tọa độ tối ưu hóa dựa vào Tên tòa nhà và Địa chỉ hoàn toàn miễn phí"""
     try:
-        # Khởi tạo geolocator (bắt buộc phải đặt tên user_agent riêng biệt của bạn)
-        geolocator = Nominatim(user_agent="niceoffice_scraper_tool_v1")
+        geolocator = Nominatim(user_agent="niceoffice_building_locator_v2")
 
-        # Kết hợp tên tòa nhà và địa chỉ, thêm ", Thành phố Hồ Chí Minh" để tối ưu hóa tìm kiếm
-        query = f"{building_name}, {address}, Thành phố Hồ Chí Minh"
-        
-        # Gọi API OpenStreetMap
-        location = geolocator.geocode(query, timeout=10)
-        
-        if location:
-            return location.latitude, location.longitude
-        else:
-            # Nếu tìm kết hợp không ra, thử tìm chỉ với Địa chỉ thu gọn hơn
-            location_alt = geolocator.geocode(f"{address}, Thành phố Hồ Chí Minh", timeout=10)
-            if location_alt:
-                return location_alt.latitude, location_alt.longitude
+        # Làm sạch tên tòa nhà (loại bỏ chữ 'TÒA NHÀ' nếu có để tìm kiếm trên bản đồ chuẩn hơn)
+        clean_name = re.sub(
+            r"^tòa nhà\s*", "", building_name, flags=re.IGNORECASE
+        ).strip()
+
+        # Thử lần 1: Kết hợp "Tên tòa nhà + Địa chỉ + Thành phố Hồ Chí Minh"
+        queries = [
+            f"{clean_name}, {address}, Thành phố Hồ Chí Minh",
+            f"{building_name}, {address}, TP.HCM",
+            f"{address}, Thành phố Hồ Chí Minh",  # Fallback nếu tên tòa nhà quá đặc biệt không tìm thấy
+        ]
+
+        for q in queries:
+            if not q.strip():
+                continue
+            location = geolocator.geocode(q, timeout=5)
+            if location:
+                return location.latitude, location.longitude
     except Exception:
         pass
     return "", ""
@@ -257,15 +261,15 @@ def scrape_data(base_url):
     if not df.empty:
         df.drop_duplicates(subset=["Tòa nhà"], inplace=True)
 
-        # Tiến hành quét tọa độ tự động qua OpenStreetMap (Miễn phí)
+        # Tiến hành quét tọa độ tự động dựa trên Tên tòa nhà và Địa chỉ
         status_text.text(
-            "🗺️ Đang quét kinh độ, vĩ độ qua OpenStreetMap (Miễn phí)..."
+            "🗺️ Đang tra cứu tọa độ theo Tên tòa nhà và Địa chỉ..."
         )
         lat_list = []
         lng_list = []
 
         for index, row in df.iterrows():
-            lat, lng = get_lat_lng_free(row["Địa chỉ"], row["Tòa nhà"])
+            lat, lng = get_lat_lng_by_building(row["Tòa nhà"], row["Địa chỉ"])
             lat_list.append(lat)
             lng_list.append(lng)
 
@@ -278,7 +282,9 @@ def scrape_data(base_url):
 
 
 # 2. NÚT KÍCH HOẠT QUÉT DỮ LIỆU
-if st.button("🚀 Bắt Đầu Thu Thập & Lấy Tọa Độ Miễn Phí", type="primary"):
+if st.button(
+    "🚀 Bắt Đầu Thu Thập & Lấy Tọa Độ Theo Tên Tòa Nhà", type="primary"
+):
     if not target_url:
         st.warning("Vui lòng nhập đường link danh mục!")
     else:
@@ -290,7 +296,7 @@ if st.button("🚀 Bắt Đầu Thu Thập & Lấy Tọa Độ Miễn Phí", typ
             )
 
             # 3. HIỂN THỊ BẢNG KẾT QUẢ NGAY BÊN DƯỚI
-            st.subheader("📊 Bảng Dữ Liệu Trực Quan (Có Tọa Độ)")
+            st.subheader("📊 Bảng Dữ Liệu Trực Quan (Có Tọa Độ Tòa Nhà)")
             st.dataframe(df_result, use_container_width=True)
 
             # Hiển thị trực quan lên bản đồ Streamlit
@@ -316,7 +322,7 @@ if st.button("🚀 Bắt Đầu Thu Thập & Lấy Tọa Độ Miễn Phí", typ
             st.download_button(
                 label="📥 Tải File Excel Kết Quả (.xlsx)",
                 data=buffer.getvalue(),
-                file_name="NiceOffice_Free_Coordinates.xlsx",
+                file_name="NiceOffice_Building_Coordinates.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
         else:
